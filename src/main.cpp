@@ -163,6 +163,7 @@ void setup() {
     pinMode(pwmB[i], OUTPUT);
     pinMode(encPins[i], INPUT);
   }
+  analogWriteFreq(2000);
 
   EEPROM.begin(64);
   loadEEPROM();

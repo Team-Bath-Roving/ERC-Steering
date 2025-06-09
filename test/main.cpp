@@ -4,7 +4,7 @@
 #include <rcl/rcl.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
-#include <EEPROM.h>
+// #include <EEPROM.h>
 
 #include <std_msgs/msg/bool.h>
 
@@ -64,23 +64,23 @@ std_msgs__msg__Float32 feedback_msgs[NUM_MOTORS];
 // ---------- Helper Functions ---------------
 
 void saveEEPROM() {
-  EEPROM.update(EEPROM_ADDR, pidConfig);
-  for (int i = 0; i < NUM_MOTORS; ++i) {
-    EEPROM.update(EEPROM_ADDR + sizeof(pidConfig), offsets[i]);
-  }
-  EEPROM.commit();  // Only needed on some platforms (safe to call anyway)
+  // EEPROM.update(EEPROM_ADDR, pidConfig);
+  // for (int i = 0; i < NUM_MOTORS; ++i) {
+  //   EEPROM.update(EEPROM_ADDR + sizeof(pidConfig), offsets[i]);
+  // }
+  // EEPROM.commit();  // Only needed on some platforms (safe to call anyway)
   
 }
 
 void loadEEPROM() {
-  EEPROM.get(EEPROM_ADDR, pidConfig);
-  for (int i = 0; i < NUM_MOTORS; ++i) {
-    EEPROM.get(EEPROM_ADDR + sizeof(pidConfig), offsets[i]);
-  }
-  // Optional: sanity check values to avoid garbage
-  if (isnan(pidConfig.kp) || pidConfig.kp < 0 || pidConfig.kp > 100) {
-    pidConfig = {1.0, 0.0, 0.0};  // reset if corrupted
-  }
+  // EEPROM.get(EEPROM_ADDR, pidConfig);
+  // for (int i = 0; i < NUM_MOTORS; ++i) {
+  //   EEPROM.get(EEPROM_ADDR + sizeof(pidConfig), offsets[i]);
+  // }
+  // // Optional: sanity check values to avoid garbage
+  // if (isnan(pidConfig.kp) || pidConfig.kp < 0 || pidConfig.kp > 100) {
+  //   pidConfig = {1.0, 0.0, 0.0};  // reset if corrupted
+  // }
 }
 
 void setMotorPWM(uint8_t id, float effort) {
@@ -174,12 +174,12 @@ void setup() {
     pinMode(encPins[i], INPUT);
   }
 
-  EEPROM.begin(64);
+  // EEPROM.begin(64);
   loadEEPROM();
 
 
-  // set_microros_transports();
-  set_microros_serial_transports(Serial);
+  set_microros_transports();
+  // set_microros_serial_transports(Serial);
   delay(2000);
 
   allocator = rcl_get_default_allocator();
