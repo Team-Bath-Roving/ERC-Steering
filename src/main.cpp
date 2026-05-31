@@ -2,6 +2,16 @@
 #include <EEPROM.h>
 #include "PwmIn.h"
 
+#include <micro_ros_platformio.h>
+#include <rcl/rcl.h>
+#include <rclc/rclc.h>
+#include <rclc/executor.h>
+#include <rcl/error_handling.h>
+#include <rmw_microros/rmw_microros.h>
+
+#include <std_msgs/msg/float32_multi_array.h>
+
+
 #define NUM_MOTORS 4
 #define PWM_FREQ 2000
 #define PWM_RANGE 1024
@@ -16,18 +26,21 @@ const uint8_t pwmB[NUM_MOTORS] =    {14, 4, 7, 2};
 uint encPins[NUM_MOTORS] =          {29, 28, 27, 26};
 PwmIn encoders(encPins, NUM_MOTORS);
 
-const float MAX_ANGLE = 170;
-const float MIN_ANGLE = -170;
+const float MAX_ANGLE = 225;
+const float MIN_ANGLE = -225;
 
 float offsets[NUM_MOTORS] = {0};
 float target_angles[NUM_MOTORS] = {0};
 float current_angles[NUM_MOTORS] = {0};
+float previous_angles[NUM_MOTORS] = {0};
+int wrapping[NUM_MOTORS] = {0};
 
 struct PIDConfig {
   float kp=0.2;
   float ki=0;
   float kd=0;
 };
+
 
 PIDConfig pidConfig = {1.0, 0.0, 0.0};
 float pid_integral[NUM_MOTORS] = {0};
@@ -37,19 +50,47 @@ bool estop_active = false;
 unsigned long last_control_time = 0;
 const unsigned long control_interval = 20;
 
-void saveEEPROM() {
+/* ------------------------------- ROS objects ------------------------------ */
+
+rclc_support_t support;
+rcl_allocator_t allocator;
+rcl_node_t node;
+rclc_executor_t executor;
+
+/* ------------------------------- ROS Topics ------------------------------- */
+
+rcl_publisher_t current_angles_pub;
+std_msgs__msg__Float32MultiArray current_angles_msg;
+
+rcl_subscription_t target_angles_sub;
+std_msgs__msg__Float32MultiArray target_angles_msg;
+
+
+// void saveEEPROM() {
 //   EEPROM.put(EEPROM_ADDR, pidConfig);
 //   for (int i = 0; i < NUM_MOTORS; ++i)
 //     EEPROM.put(EEPROM_ADDR + sizeof(pidConfig) + i * sizeof(float), offsets[i]);
-}
+// }
 
-void loadEEPROM() {
+// void loadEEPROM() {
 //   EEPROM.get(EEPROM_ADDR, pidConfig);
 //   for (int i = 0; i < NUM_MOTORS; ++i)
 //     EEPROM.get(EEPROM_ADDR + sizeof(pidConfig) + i * sizeof(float), offsets[i]);
 //   if (isnan(pidConfig.kp) || pidConfig.kp < 0 || pidConfig.kp > 100)
 //     pidConfig = {1.0, 0.0, 0.0};
+// }
+
+void saveEEPROM() {
+  for (int i = 0; i < NUM_MOTORS; i++)
+    EEPROM.put(EEPROM_ADDR + i * sizeof(int), wrapping[i]);
 }
+
+void loadEEPROM() {
+  for (int i = 0; i < NUM_MOTORS; i++)
+    EEPROM.get(EEPROM_ADDR + i * sizeof(int), wrapping[i]);
+}
+
+
 
 void setMotorPWM(uint8_t id, float effort) {
   if (estop_active) {
@@ -116,36 +157,27 @@ float getShortestDelta(float from, float to) {
   return delta;
 }
 
-// void controlLoop() {
-//   for (int i = 0; i < NUM_MOTORS; ++i) {
-//     // setMotorPWM(i, 255);
-//     float raw_angle = readEncoderPWM(i);
-//     current_angles[i] = raw_angle - offsets[i];
-
-//     if (estop_active) target_angles[i] = current_angles[i];
-
-//     float delta = getShortestDelta(current_angles[i], target_angles[i]);
-//     float target_abs = current_angles[i] + delta;
-//     if (target_abs < MIN_ANGLE || target_abs > MAX_ANGLE)
-//       delta = (delta > 0) ? delta - 360 : delta + 360;
-
-//     float error = delta;
-//     pid_integral[i] += error * (control_interval / 1000.0f);
-//     float derivative = (error - pid_last_error[i]) / (control_interval / 1000.0f);
-//     float output = pidConfig.kp * error + pidConfig.ki * pid_integral[i] + pidConfig.kd * derivative;
-//     setMotorPWM(i, output);
-//     pid_last_error[i] = error;
-//   }
-// }
-
 void controlLoop() {
   for (int i = 0; i < NUM_MOTORS; ++i) {
     float raw_angle = readEncoderPWM(i);
-    current_angles[i] = raw_angle - offsets[i];
-
+    current_angles[i] = raw_angle - offsets[i] ;
+    
     // --- NORMALIZE CURRENT ANGLE to -180 to 180 range ---
     while (current_angles[i] > 180.0f) current_angles[i] -= 360.0f;
     while (current_angles[i] < -180.0f) current_angles[i] += 360.0f;
+    
+    if (previous_angles[i] > 135.0f and current_angles[i] < -135.0f)
+    {
+      if (wrapping[i] < 1) wrapping[i] += 1;
+      saveEEPROM();
+    }
+    else if (previous_angles[i] < -135.0f and current_angles[i] > 135.0f)
+    {
+      if (wrapping[i] > -1) wrapping[i] -= 1;
+      saveEEPROM();
+    }
+
+    current_angles[i] += wrapping[i] * 360.0f;
 
     // --- CLAMP THE TARGET ANGLE ---
     float clamped_target = constrain(target_angles[i], MIN_ANGLE, MAX_ANGLE);
@@ -164,66 +196,49 @@ void controlLoop() {
   }
 }
 
-// void controlLoop() {
-//   for (int i = 0; i < NUM_MOTORS; ++i) {
-//     float raw_angle = readEncoderPWM(i);
-//     current_angles[i] = raw_angle - offsets[i];
+void target_angles_callback(const void* msgin) {
+  const std_msgs__msg__Float32MultiArray* msg = (const std_msgs__msg__Float32MultiArray*)msgin;
+  if (estop_active) return;
 
-//     if (estop_active) target_angles[i] = current_angles[i];
-
-//     // --- CORRECTED LOGIC ---
-//     // 1. Calculate the shortest path.
-//     float delta = getShortestDelta(current_angles[i], target_angles[i]);
-
-//     // 2. The error for the PID is simply this delta.
-//     float error = delta;
-    
-//     // (The problematic "if (target_abs...)" block has been completely removed)
-
-//     pid_integral[i] += error * (control_interval / 1000.0f);
-//     float derivative = (error - pid_last_error[i]) / (control_interval / 1000.0f);
-//     float output = pidConfig.kp * error + pidConfig.ki * pid_integral[i] + pidConfig.kd * derivative;
-//     setMotorPWM(i, output*direction[i]);
-//     pid_last_error[i] = error;
-//   }
-// }
-
-void parseSerial() {
-  if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
-    cmd.trim();
-
-    if (cmd.startsWith("A")) {
-      sscanf(cmd.c_str(), "A %f %f %f %f", &target_angles[0], &target_angles[1], &target_angles[2], &target_angles[3]);
-      Serial.println("Target angles set.");
-    }
-    else if (cmd.startsWith("P")) {
-      sscanf(cmd.c_str(), "P %f %f %f", &pidConfig.kp, &pidConfig.ki, &pidConfig.kd);
-      saveEEPROM();
-      Serial.println("PID parameters updated.");
-    }
-    else if (cmd.startsWith("O")) {
-      sscanf(cmd.c_str(), "O %f %f %f %f", &offsets[0], &offsets[1], &offsets[2], &offsets[3]);
-      saveEEPROM();
-      Serial.println("Offsets set.");
-    }
-    else if (cmd.startsWith("R")) {
-      Serial.print("Angles: ");
-      for (int i = 0; i < NUM_MOTORS; ++i) {
-        Serial.print(current_angles[i]);
-        Serial.print(i < NUM_MOTORS - 1 ? ", " : "\n");
-      }
-    }
-    else {
-      Serial.println("Unknown command. Use A/P/O/R.");
-    }
+  // Fix: Only iterate up to min(NUM_JOINTS, msg->data.size)
+  size_t limit = (msg->data.size < NUM_MOTORS) ? msg->data.size : NUM_MOTORS;
+  for (size_t i = 0; i < NUM_MOTORS; i++) {
+    target_angles[i] = (msg->data.data[i]);
   }
 }
 
+void publish_current_angles()
+{
+  current_angles_msg.data.data = current_angles;
+  current_angles_msg.data.size = NUM_MOTORS;
+  current_angles_msg.data.capacity = NUM_MOTORS;
+  rcl_publish(&current_angles_pub, &current_angles_msg, NULL);
+}
+
+
 void setup() {
   Serial.begin(115200);
+  set_microros_serial_transports(Serial);
+
+  allocator = rcl_get_default_allocator();
+  rclc_support_init(&support, 0, NULL, &allocator);
+  rclc_node_init_default(&node, "steering_node", "", &support);
+
+  rclc_subscription_init_default(&target_angles_sub,&node,
+  ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
+  "/target_angles");
+
+  rclc_publisher_init_default(&current_angles_pub,&node,
+  ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
+  "/current_angles");
+
+  rclc_executor_init(&executor, &support.context, 1, &allocator);
+
+  rclc_executor_add_subscription(&executor, &target_angles_sub, &target_angles_msg,
+    &target_angles_callback, ON_NEW_DATA);
+
   delay(1000);
-//   EEPROM.begin(EEPROM_SIZE);
+  EEPROM.begin(EEPROM_SIZE);
   loadEEPROM();
 
   for (int i = 0; i < NUM_MOTORS; ++i) {
@@ -234,29 +249,16 @@ void setup() {
   pinMode(ESTOP_PIN, INPUT_PULLUP);
   analogWriteFreq(PWM_FREQ);
   analogWriteRange(PWM_RANGE);
-  Serial.println("Ready. Send A/P/O/R commands.");
 }
 
 void loop() {
+  rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
 
-  parseSerial();
-//   for (int i = 0; i < NUM_MOTORS; ++i) {
-//     setMotorPWM(i,1024);
-//     }
-//     delay(1000);
-// for (int i = 0; i < NUM_MOTORS; ++i) {
-//     setMotorPWM(i,-1024);
-//     }
-//     delay(1000);
   unsigned long now = millis();
   if (now - last_control_time >= control_interval) {
     estop_active = digitalRead(ESTOP_PIN) == LOW;
     controlLoop();
     last_control_time = now;
-    Serial.print("Angles: ");
-    for (int i = 0; i < NUM_MOTORS; ++i) {
-        Serial.print(current_angles[i]);
-        Serial.print(i < NUM_MOTORS - 1 ? ", " : "\n");
-        }
+    publish_current_angles();
   }
 }

@@ -2,6 +2,10 @@
 
 This project provides Pi Pico micro-ROS firmware for controlling **four steering motors** using dual-PWM H-bridge drivers and **AS5048A encoders in PWM mode**. PID control is used to track angle targets per motor, and the controller is fully configurable over ROS 2.
 
+### Features
+
+The drive supports angle wrapping, allowing rotations eitherside of the centre axis up to 225 $$\circ$$.
+
 ---
 
 ## ROS 2 Topics
@@ -66,5 +70,8 @@ sudo apt install python3-venv cmake gcc g++
 
 Install the PlatformIO extension for VSCode.
 **Note:** micro-ROS PlatformIO currently only builds reliably on Ubuntu / Debian / Linux Mint. Windows builds are not supported.
+
+Due to build support issues, on the first build one should set the microros_distro to Jazzy from within the platformio.ini file. Subsequently the target distro of Humble can be set as required for the project.  
+``` board_microros_distro = jazzy``` 
 
 ---
