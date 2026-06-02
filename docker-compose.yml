@@ -1,0 +1,9 @@
+services:
+  micro_ros_agent:
+    image: microros/micro-ros-agent:humble
+    network_mode: host
+    privileged: true
+    volumes:
+      - /dev:/dev
+    command: >
+      serial --dev /dev/ttyACM0 -b 115200 -v6
