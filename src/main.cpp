@@ -397,6 +397,12 @@ void setup() {
   pinMode(ESTOP_PIN, INPUT_PULLUP);
   analogWriteFreq(PWM_FREQ);
   analogWriteRange(PWM_RANGE);
+
+  // Initialise the starting Target Angle to the current measure angle.
+  for (int i = 0; i < NUM_MOTORS; ++i) {
+    float raw_angle = readEncoderPWM(i);
+    target_angles[i] = constrain(raw_angle - offsets[i] , MIN_ANGLE, MAX_ANGLE);
+  }
 }
 
 
